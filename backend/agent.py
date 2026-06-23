@@ -3,13 +3,31 @@ import urllib.parse
 
 def get_agent_research(label: str) -> dict:
     try:
-        # Manual overrides for specific classes
+        # Manual overrides to exact Wikipedia page titles
         overrides = {
-            "Sea Rays": "Batoidea",
-            "Turtle_Tortoise": "Turtle",
-            "Puffers": "Pufferfish",
+            "Clams": "Clam",
+            "Corals": "Coral",
+            "Crabs": "Crab",
+            "Dolphin": "Dolphin",
             "Eel": "Eel",
-            "Seal": "Pinniped"
+            "Fish": "Fish",
+            "Jelly Fish": "Jellyfish",
+            "Lobster": "Lobster",
+            "Nudibranchs": "Nudibranch",
+            "Octopus": "Octopus",
+            "Otter": "Otter",
+            "Penguin": "Penguin",
+            "Puffers": "Pufferfish",
+            "Sea Rays": "Batoidea",
+            "Sea Urchins": "Sea urchin",
+            "Seahorse": "Seahorse",
+            "Seal": "Pinniped",
+            "Sharks": "Shark",
+            "Shrimp": "Shrimp",
+            "Squid": "Squid",
+            "Starfish": "Starfish",
+            "Turtle_Tortoise": "Sea turtle",
+            "Whale": "Whale"
         }
         
         search_label = overrides.get(label, label)
