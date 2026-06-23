@@ -55,6 +55,7 @@ transform = transforms.Compose([
 
 def predict_image(img: Image.Image):
     m = get_model()
+    m.eval() # Force eval mode right before prediction
     x = transform(img).unsqueeze(0).to(device)
     
     # Test-Time Augmentation (TTA) - Horizontal Flip
