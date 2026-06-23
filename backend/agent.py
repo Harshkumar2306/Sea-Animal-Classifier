@@ -38,13 +38,22 @@ def get_agent_research(label: str) -> dict:
         
         # Helper function to get summary
         def fetch_summary(title):
-            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
+            url = f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info&inprop=url&exintro=1&explaintext=1&titles={urllib.parse.quote(title)}&format=json"
             r = requests.get(url, headers=headers)
             if r.status_code == 200:
-                data = r.json()
-                if data.get("type") == "disambiguation":
-                    return None # Try searching instead
-                return data
+                try:
+                    data = r.json()
+                    pages = data.get("query", {}).get("pages", {})
+                    if pages:
+                        page = list(pages.values())[0]
+                        if "missing" not in page and "extract" in page:
+                            return {
+                                "title": page.get("title", title),
+                                "extract": page.get("extract", ""),
+                                "url": page.get("fullurl", f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title)}")
+                            }
+                except:
+                    pass
             return None
 
         # 1. Try exact label
@@ -62,11 +71,14 @@ def get_agent_research(label: str) -> dict:
             
             search_res = requests.get(search_url, headers=headers)
             if search_res.status_code == 200:
-                search_data = search_res.json()
-                results = search_data.get('query', {}).get('search', [])
-                if results:
-                    first_title = results[0]['title']
-                    data = fetch_summary(first_title)
+                try:
+                    search_data = search_res.json()
+                    results = search_data.get('query', {}).get('search', [])
+                    if results:
+                        first_title = results[0]['title']
+                        data = fetch_summary(first_title)
+                except:
+                    pass
                     
         if not data:
             return {"error": f"No information found for {label}."}
@@ -79,7 +91,7 @@ def get_agent_research(label: str) -> dict:
         return {
             "title": data.get("title", search_label),
             "summary": summary,
-            "url": data.get("content_urls", {}).get("desktop", {}).get("page", "")
+            "url": data.get("url", "")
         }
 
     except Exception as e:
