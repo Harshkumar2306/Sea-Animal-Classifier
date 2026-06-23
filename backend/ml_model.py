@@ -33,7 +33,7 @@ class BioHMSC(nn.Module):
         return self.species_head(feats), self.coarse_head(feats)
 
 device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
-MODEL_PATH = "../BioHMSC_best_model.pth"
+MODEL_PATH = "BioHMSC_best_model.pth"
 
 model = None
 
