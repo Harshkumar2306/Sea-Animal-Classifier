@@ -5,9 +5,9 @@ Built using **FastAPI**, **PyTorch (EfficientNetV2)**, **Hugging Face Spaces (Do
 
 ## 🚀 Live Demo & Links
 
-🌐 **Frontend (Vercel)**: [https://sea-animal-classifier.vercel.app/](https://sea-animal-classifier.vercel.app/)
-⚙️ **Backend API (Hugging Face)**: [https://huggingface.co/spaces/harsh0o23/seaanimal-api](https://huggingface.co/spaces/harsh0o23/seaanimal-api)
-🐙 **GitHub Repository**: [https://github.com/Harshkumar2306/Sea-Animal-Classifier](https://github.com/Harshkumar2306/Sea-Animal-Classifier)
+* 🌐 **Frontend (Vercel)**: [https://sea-animal-classifier.vercel.app/](https://sea-animal-classifier.vercel.app/)
+* ⚙️ **Backend API (Hugging Face)**: [https://huggingface.co/spaces/harsh0o23/seaanimal-api](https://huggingface.co/spaces/harsh0o23/seaanimal-api)
+* 🐙 **GitHub Repository**: [https://github.com/Harshkumar2306/Sea-Animal-Classifier](https://github.com/Harshkumar2306/Sea-Animal-Classifier)
 
 ---
 
