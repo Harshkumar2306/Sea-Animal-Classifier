@@ -343,6 +343,4 @@ Frontend Web App will open at: `http://localhost:5173`
 - **Model Backbone**: `timm` (PyTorch Image Models by Ross Wightman)
 - **Dataset**: Marine Species Image Dataset (Flickr curated & partitioned)
 
-<div align="center">
-  <sub>Built with ❤️ for marine biology, deep learning research, and cloud computing.</sub>
-</div>
+
