@@ -22,6 +22,14 @@ app.add_middleware(
 class AgentRequest(BaseModel):
     label: str
 
+@app.get("/")
+async def root():
+    return {"status": "alive", "message": "Sea Animal Classifier API is running"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
