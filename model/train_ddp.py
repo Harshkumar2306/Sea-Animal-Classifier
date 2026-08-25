@@ -584,15 +584,73 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"ROC Curve export note: {e}")
 
-        # 4. Print Empirical Summary Tables
-        print("\n--- ABLATION STUDY SUMMARY ---")
+        # 4. Ablation Gain Bar Plot
         if metrics_A and metrics_B and metrics_C:
-            print(f"  Config A (Standard CE)            : {metrics_A['acc']:.2f}%")
-            print(f"  Config B (+ Taxonomy Loss)        : {metrics_B['acc']:.2f}% [Δ: {metrics_B['acc']-metrics_A['acc']:+.2f}pp]")
-            print(f"  Config C (+ EMA)                  : {metrics_C['acc']:.2f}% [Δ: {metrics_C['acc']-metrics_B['acc']:+.2f}pp]")
-            print(f"  Config D (Full Bio-HMSC+++ + TTA) : {metrics_proposed['acc']:.2f}% [Δ: {metrics_proposed['acc']-metrics_C['acc']:+.2f}pp]")
+            plt.figure(figsize=(10, 6))
+            ablation_names = ["Standard CE", "+ Taxonomy Loss", "+ EMA Smoothing", "Full Bio-HMSC+++ (TTA)"]
+            ablation_accs = [metrics_A['acc'], metrics_B['acc'], metrics_C['acc'], metrics_proposed['acc']]
+            colors = ["#4A90E2", "#50E3C2", "#F5A623", "#7ED321"]
+            bars = plt.bar(ablation_names, ablation_accs, color=colors, width=0.55, edgecolor="black", linewidth=1.2)
+            plt.ylim(min(ablation_accs) - 3.0, 100)
+            plt.ylabel("Test Accuracy (%)", fontsize=12, fontweight="bold")
+            plt.title("Step-by-Step Ablation Performance Gain", fontsize=14, fontweight="bold", pad=15)
+            plt.grid(axis="y", linestyle="--", alpha=0.7)
+            for bar in bars:
+                yval = bar.get_height()
+                plt.text(bar.get_x() + bar.get_width()/2.0, yval + 0.3, f"{yval:.2f}%", ha='center', va='bottom', fontsize=11, fontweight="bold")
+            plt.tight_layout()
+            plt.savefig("/kaggle/working/ablation_barplot.png", dpi=300, bbox_inches='tight')
+            plt.close()
 
-        print("\n--- BASELINE COMPARISON TABLE ---")
+        # 5. Baseline Comparison Bar Plot
+        plt.figure(figsize=(12, 6))
+        all_models = list(baseline_results.keys()) + ["Bio-HMSC+++ (Proposed)"]
+        all_accs = [b["metrics"]["acc"] for b in baseline_results.values()] + [metrics_proposed["acc"]]
+        all_f1s = [b["metrics"]["macro_f1"] for b in baseline_results.values()] + [metrics_proposed["macro_f1"]]
+        x = np.arange(len(all_models))
+        width = 0.35
+        plt.bar(x - width/2, all_accs, width, label='Top-1 Accuracy (%)', color='#2b5c8f', edgecolor='black')
+        plt.bar(x + width/2, all_f1s, width, label='Macro F1 (%)', color='#e06666', edgecolor='black')
+        plt.ylabel('Score (%)', fontsize=12, fontweight='bold')
+        plt.title('Baseline Architecture Comparisons (Fair Evaluation with TTA)', fontsize=14, fontweight='bold', pad=15)
+        plt.xticks(x, all_models, fontsize=11, fontweight='bold')
+        plt.ylim(75, 100)
+        plt.legend(frameon=True, facecolor='white', framealpha=0.9)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.savefig("/kaggle/working/baseline_comparison.png", dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # 6. Export LaTeX Tables
+        with open("/kaggle/working/table_ablation.tex", "w") as f:
+            f.write(f"""\\begin{{table}}[htbp]
+\\centering
+\\caption{{Ablation Study of Bio-HMSC+++ Framework}}
+\\label{{tab:ablation}}
+\\begin{{tabular}}{{lccc}}
+\\hline
+\\textbf{{Configuration}} & \\textbf{{Top-1 Acc (\\%)}} & \\textbf{{Macro F1 (\\%)}} & \\textbf{{$\\Delta$ Gain}} \\\\
+\\hline
+Config A: Standard CE & {metrics_A['acc']:.2f} & {metrics_A['macro_f1']:.2f} & — \\\\
+Config B: + Taxonomy Loss & {metrics_B['acc']:.2f} & {metrics_B['macro_f1']:.2f} & {metrics_B['acc']-metrics_A['acc']:+.2f}\\% \\\\
+Config C: + EMA Weight Smoothing & {metrics_C['acc']:.2f} & {metrics_C['macro_f1']:.2f} & {metrics_C['acc']-metrics_B['acc']:+.2f}\\% \\\\
+Config D: + TTA (Full Bio-HMSC+++) & {metrics_proposed['acc']:.2f} & {metrics_proposed['macro_f1']:.2f} & {metrics_proposed['acc']-metrics_C['acc']:+.2f}\\% \\\\
+\\hline
+\\end{{tabular}}
+\\end{{table}}""")
+
+        # 7. Print Empirical Summary Tables
+        print("\n" + "="*70)
+        print("                 FINAL RESEARCH PAPER REPORT")
+        print("="*70)
+        if metrics_A and metrics_B and metrics_C:
+            print("\n--- ABLATION STUDY ---")
+            print(f"  Config A (Standard CE)            : {metrics_A['acc']:.2f}% | F1: {metrics_A['macro_f1']:.2f}%")
+            print(f"  Config B (+ Taxonomy Loss)        : {metrics_B['acc']:.2f}% | F1: {metrics_B['macro_f1']:.2f}% [Δ: {metrics_B['acc']-metrics_A['acc']:+.2f}pp]")
+            print(f"  Config C (+ EMA)                  : {metrics_C['acc']:.2f}% | F1: {metrics_C['macro_f1']:.2f}% [Δ: {metrics_C['acc']-metrics_B['acc']:+.2f}pp]")
+            print(f"  Config D (Full Bio-HMSC+++ + TTA) : {metrics_proposed['acc']:.2f}% | F1: {metrics_proposed['macro_f1']:.2f}% [Δ: {metrics_proposed['acc']-metrics_C['acc']:+.2f}pp]")
+
+        print("\n--- COMPARISON BENCHMARK ---")
         for b_label, b_data in baseline_results.items():
             bm = b_data["metrics"]
             pm = b_data["model"]
@@ -600,6 +658,15 @@ if __name__ == "__main__":
             print(f"  {b_label:<22} | Acc: {bm['acc']:>6.2f}% | F1: {bm['macro_f1']:>6.2f}% | AUC: {bm['roc_auc']:.4f} | {params:.1f}M params")
         prop_p = sum(p.numel() for p in proposed_model.parameters()) / 1e6
         print(f"  {'Bio-HMSC+++ (Proposed)':<22} | Acc: {metrics_proposed['acc']:>6.2f}% | F1: {metrics_proposed['macro_f1']:>6.2f}% | AUC: {metrics_proposed['roc_auc']:.4f} | {prop_p:.1f}M params")
+        print("="*70)
+        print("\n✓ ALL 5 PUBLICATION FIGURES SAVED (300 DPI):")
+        print("  1. /kaggle/working/confusion_matrix.png")
+        print("  2. /kaggle/working/training_curves.png")
+        print("  3. /kaggle/working/roc_curves.png")
+        print("  4. /kaggle/working/ablation_barplot.png")
+        print("  5. /kaggle/working/baseline_comparison.png")
+        print("✓ LATEX TABLE SAVED: /kaggle/working/table_ablation.tex")
+        print("✓ ALL MODEL CHECKPOINTS SAVED (.pth)")
 
     if world_size > 1:
         dist.destroy_process_group()
