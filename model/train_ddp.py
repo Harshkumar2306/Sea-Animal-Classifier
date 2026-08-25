@@ -283,6 +283,8 @@ def train_one_epoch(model, ema, loader, optimizer, scaler, loss_fn, use_coarse_l
             loss = loss_fn(s_out, fine_lbl)
             if use_coarse_loss:
                 loss = loss + nn.functional.cross_entropy(c_out, coarse_lbl)
+            else:
+                loss = loss + (0.0 * c_out).sum()
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -385,7 +387,7 @@ def full_train_run(backbone_name, loss_fn, use_coarse_loss, use_ema, model_save_
 
     base_model = BioHMSC(backbone_name).to(device)
     if world_size > 1:
-        model = DDP(base_model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
+        model = DDP(base_model, device_ids=[local_rank], output_device=local_rank)
     else:
         model = base_model
 
