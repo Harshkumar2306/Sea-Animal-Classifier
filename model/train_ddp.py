@@ -51,8 +51,8 @@ def setup_ddp():
         rank, world_size, local_rank = 0, 1, 0
 
     if world_size > 1:
-        dist.init_process_group(backend="nccl", init_method="env://")
         torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl", init_method="env://")
     return rank, world_size, local_rank
 
 rank, world_size, local_rank = setup_ddp()
@@ -324,15 +324,6 @@ def validate(eval_model, loader):
             correct      += (out.argmax(1) == fine_lbl).sum().item()
             total        += fine_lbl.size(0)
 
-    if world_size > 1:
-        loss_t = torch.tensor(running_loss, device=device)
-        corr_t = torch.tensor(correct, device=device)
-        tot_t  = torch.tensor(total, device=device)
-        dist.all_reduce(loss_t, op=dist.ReduceOp.SUM)
-        dist.all_reduce(corr_t, op=dist.ReduceOp.SUM)
-        dist.all_reduce(tot_t,  op=dist.ReduceOp.SUM)
-        return loss_t.item() / (len(loader) * world_size), 100.0 * corr_t.item() / tot_t.item()
-
     return running_loss / len(loader), 100.0 * correct / total
 
 def evaluate_full(eval_model, loader, apply_tta=False):
@@ -423,7 +414,12 @@ def full_train_run(backbone_name, loss_fn, use_coarse_loss, use_ema, model_save_
                 early_stop_ctr += 1
                 if early_stop_ctr >= PATIENCE:
                     print(f"  Early stopping triggered at epoch {epoch+1}")
-                    break
+
+        if world_size > 1:
+            stop_tensor = torch.tensor([1 if early_stop_ctr >= PATIENCE else 0], device=device)
+            dist.broadcast(stop_tensor, src=0)
+            if stop_tensor.item() == 1:
+                break
 
     if is_main_process:
         eval_model = BioHMSC(backbone_name).to(device)
