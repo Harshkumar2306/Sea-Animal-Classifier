@@ -30,8 +30,8 @@ import matplotlib.pyplot as plt
 # REPRODUCIBILITY & DEVICE
 # ============================================================
 
-torch.backends.cudnn.benchmark = False
-torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.deterministic = False
 
 SEED = 42
 random.seed(SEED)
@@ -246,11 +246,11 @@ sample_weights = [class_weights[t] for t in targets]
 sampler        = WeightedRandomSampler(sample_weights, len(sample_weights), generator=g)
 
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=sampler,
-                          num_workers=2, pin_memory=True, generator=g)
+                          num_workers=4, pin_memory=True, persistent_workers=True, prefetch_factor=2, generator=g)
 val_loader   = DataLoader(val_dataset,   batch_size=BATCH_SIZE, shuffle=False,
-                          num_workers=2, pin_memory=True)
+                          num_workers=4, pin_memory=True, persistent_workers=True, prefetch_factor=2)
 test_loader  = DataLoader(test_dataset,  batch_size=BATCH_SIZE, shuffle=False,
-                          num_workers=2, pin_memory=True)
+                          num_workers=4, pin_memory=True, persistent_workers=True, prefetch_factor=2)
 
 # ============================================================
 # 7. MODEL ARCHITECTURE
