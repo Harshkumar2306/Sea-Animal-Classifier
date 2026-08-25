@@ -52,8 +52,9 @@ g.manual_seed(SEED)
 
 EPOCHS           = 40
 num_gpus         = max(1, torch.cuda.device_count())
-BATCH_SIZE       = 16 * num_gpus
-ACCUMULATION     = max(1, 2 // num_gpus)  # 1 GPU -> acc 2 (bs=16). 2 GPUs -> acc 1 (bs=32). Effective BS = 32.
+# Using 16 TOTAL batch size (8 per GPU on 2 GPUs) to avoid OOM, while maintaining effective BS of 32
+BATCH_SIZE       = 16 
+ACCUMULATION     = 2  
 LEARNING_RATE    = 1e-4
 WEIGHT_DECAY     = 1e-4
 EMA_DECAY        = 0.9998
