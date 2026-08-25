@@ -309,7 +309,7 @@ def train_one_epoch(model, ema, loader, optimizer, scaler, loss_fn, use_coarse_l
 
     return running_loss / len(loader), 100.0 * correct / total
 
-def validate(eval_model, loader):
+def validate(eval_model, loader, loss_fn, use_coarse_loss):
     eval_model.eval()
     running_loss = correct = total = 0
     with torch.no_grad():
@@ -318,7 +318,11 @@ def validate(eval_model, loader):
             fine_lbl   = fine_lbl.to(device, non_blocking=True)
             coarse_lbl = coarse_lbl.to(device, non_blocking=True)
             out, c_out = eval_model(imgs)
-            loss       = taxonomy_aware_loss(out, fine_lbl) + nn.functional.cross_entropy(c_out, coarse_lbl)
+            
+            loss = loss_fn(out, fine_lbl)
+            if use_coarse_loss:
+                loss = loss + nn.functional.cross_entropy(c_out, coarse_lbl)
+                
             running_loss += loss.item()
             correct      += (out.argmax(1) == fine_lbl).sum().item()
             total        += fine_lbl.size(0)
@@ -405,7 +409,7 @@ def full_train_run(backbone_name, loss_fn, use_coarse_loss, use_ema, model_save_
 
         if is_main_process:
             eval_model = ema.module if use_ema else (model.module if hasattr(model, 'module') else model)
-            v_loss, v_acc = validate(eval_model, val_loader)
+            v_loss, v_acc = validate(eval_model, val_loader, loss_fn, use_coarse_loss)
             scheduler.step()
 
             train_loss_hist.append(t_loss)
