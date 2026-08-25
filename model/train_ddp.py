@@ -67,15 +67,18 @@ def print_main(*args, **kwargs):
 
 print_main(f"[DDP Cluster] World Size: {world_size} GPUs initialized | cuDNN Benchmark: Active")
 
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # ============================================================
-# 2. HYPERPARAMETERS (Max Capacity for 13.5GB VRAM per GPU)
+# 2. HYPERPARAMETERS (Optimal Capacity for Dual T4 GPUs)
 # ============================================================
 
 EPOCHS               = 40
-BATCH_SIZE_PER_GPU   = 24          # 24 per GPU = 48 Global Batch Size (Fills ~13.5GB VRAM per T4)
+BATCH_SIZE_PER_GPU   = 16          # 16 per GPU = 32 Global Batch Size (Optimal ~11-12GB VRAM per GPU)
 GLOBAL_BATCH_SIZE    = BATCH_SIZE_PER_GPU * world_size
 ACCUMULATION         = 1           # Direct 1-step gradient updates
-LEARNING_RATE        = 1.5e-4      # Slightly scaled for larger global batch size
+LEARNING_RATE        = 1.2e-4
 WEIGHT_DECAY         = 1e-4
 EMA_DECAY            = 0.9998
 LABEL_SMOOTHING      = 0.1
