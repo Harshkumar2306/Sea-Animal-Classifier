@@ -515,7 +515,6 @@ proposed_model.eval()
 with torch.no_grad():
     for imgs, _, coarse_lbl in test_loader:
         imgs = imgs.to(device, non_blocking=True)
-        c1, _ = proposed_model(imgs), None
         _, co1 = proposed_model(imgs)
         _, co2 = proposed_model(torch.flip(imgs, dims=[3]))
         c_avg  = (co1 + co2) / 2.0
