@@ -370,6 +370,15 @@ def compute_metrics(preds, labels, probs, label="Model"):
 def full_train_run(backbone_name, loss_fn, use_coarse_loss, use_ema, model_save_path, label=""):
     print_main(f"\n{'#'*60}\n  TRAINING: {label}\n  backbone={backbone_name}, DDP World Size={world_size}\n{'#'*60}")
 
+    full_save_path = f"/kaggle/working/{model_save_path}"
+    if os.path.exists(full_save_path):
+        print_main(f"  [Auto-Resume] Found existing checkpoint '{model_save_path}'. Skipping training to save time!")
+        if is_main_process:
+            eval_model = BioHMSC(backbone_name).to(device)
+            eval_model.load_state_dict(torch.load(full_save_path, weights_only=True))
+            return eval_model, {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], "best_val_acc": 0, "total_mins": 0}
+        return None, None
+
     base_model = BioHMSC(backbone_name).to(device)
     if world_size > 1:
         model = DDP(base_model, device_ids=[local_rank], output_device=local_rank)
@@ -385,7 +394,6 @@ def full_train_run(backbone_name, loss_fn, use_coarse_loss, use_ema, model_save_
     train_loss_hist, val_loss_hist = [], []
     train_acc_hist,  val_acc_hist  = [], []
     best_val_acc, best_epoch, early_stop_ctr = 0.0, 0, 0
-    full_save_path = f"/kaggle/working/{model_save_path}"
     run_start = time.time()
 
     for epoch in range(EPOCHS):
