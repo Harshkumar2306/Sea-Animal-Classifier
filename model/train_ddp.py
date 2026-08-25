@@ -218,12 +218,11 @@ val_dataset   = MarineDataset(val_base)
 test_dataset  = MarineDataset(test_base)
 
 train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True) if world_size > 1 else None
-val_sampler   = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False) if world_size > 1 else None
 
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE_PER_GPU, sampler=train_sampler,
                           shuffle=(train_sampler is None), num_workers=4, pin_memory=True,
                           persistent_workers=True, prefetch_factor=2)
-val_loader   = DataLoader(val_dataset, batch_size=BATCH_SIZE_PER_GPU, sampler=val_sampler,
+val_loader   = DataLoader(val_dataset, batch_size=BATCH_SIZE_PER_GPU,
                           shuffle=False, num_workers=4, pin_memory=True,
                           persistent_workers=True, prefetch_factor=2)
 test_loader  = DataLoader(test_dataset, batch_size=BATCH_SIZE_PER_GPU, shuffle=False,
@@ -327,6 +326,7 @@ def validate(eval_model, loader):
     return running_loss / len(loader), 100.0 * correct / total
 
 def evaluate_full(eval_model, loader, apply_tta=False):
+    eval_model = eval_model.to(device)
     eval_model.eval()
     all_preds, all_labels, all_probs = [], [], []
     with torch.no_grad():
@@ -342,6 +342,9 @@ def evaluate_full(eval_model, loader, apply_tta=False):
             all_preds.extend(outputs.argmax(1).cpu().numpy())
             all_labels.extend(labels.numpy())
             all_probs.extend(probs.cpu().numpy())
+            
+    eval_model = eval_model.cpu()
+    torch.cuda.empty_cache()
     return (np.array(all_preds), np.array(all_labels), np.array(all_probs))
 
 def compute_metrics(preds, labels, probs, label="Model"):
@@ -424,16 +427,28 @@ def full_train_run(backbone_name, loss_fn, use_coarse_loss, use_ema, model_save_
     if is_main_process:
         eval_model = BioHMSC(backbone_name).to(device)
         eval_model.load_state_dict(torch.load(full_save_path, weights_only=True))
+        
+        del model, optimizer, scheduler, scaler
+        if ema: del ema
+        torch.cuda.empty_cache()
+        
         return eval_model, {
             "train_loss": train_loss_hist, "val_loss": val_loss_hist,
             "train_acc": train_acc_hist, "val_acc": val_acc_hist,
             "best_val_acc": best_val_acc, "total_mins": (time.time() - run_start) / 60.0
         }
+        
+    del model, optimizer, scheduler, scaler
+    torch.cuda.empty_cache()
     return None, None
 
 # ============================================================
 # 8. COMPLETE MULTI-STAGE RESEARCH PIPELINE
 # ============================================================
+
+def sync_ranks():
+    if world_size > 1:
+        dist.barrier()
 
 if __name__ == "__main__":
     # ---------------------------------------------------------
@@ -453,6 +468,8 @@ if __name__ == "__main__":
     if is_main_process and proposed_model is not None:
         preds_prop, labels_prop, probs_prop = evaluate_full(proposed_model, test_loader, apply_tta=True)
         metrics_proposed = compute_metrics(preds_prop, labels_prop, probs_prop, label="Bio-HMSC+++ (Final Test)")
+        
+    sync_ranks()
 
     # ---------------------------------------------------------
     # STAGE 2: 4-CONFIGURATION ABLATION STUDY
@@ -472,6 +489,7 @@ if __name__ == "__main__":
     if is_main_process and model_A is not None:
         p_A, l_A, pr_A = evaluate_full(model_A, test_loader, apply_tta=False)
         metrics_A = compute_metrics(p_A, l_A, pr_A, label="Config A")
+    sync_ranks()
 
     # Config B: + Taxonomy Loss
     model_B, hist_B = full_train_run(
@@ -486,6 +504,7 @@ if __name__ == "__main__":
     if is_main_process and model_B is not None:
         p_B, l_B, pr_B = evaluate_full(model_B, test_loader, apply_tta=False)
         metrics_B = compute_metrics(p_B, l_B, pr_B, label="Config B")
+    sync_ranks()
 
     # Config C: + EMA
     model_C, hist_C = full_train_run(
@@ -500,6 +519,7 @@ if __name__ == "__main__":
     if is_main_process and model_C is not None:
         p_C, l_C, pr_C = evaluate_full(model_C, test_loader, apply_tta=False)
         metrics_C = compute_metrics(p_C, l_C, pr_C, label="Config C")
+    sync_ranks()
 
     # ---------------------------------------------------------
     # STAGE 3: BASELINE COMPARISONS
@@ -521,6 +541,7 @@ if __name__ == "__main__":
             bp, bl, bpr = evaluate_full(b_model, test_loader, apply_tta=True)
             bm = compute_metrics(bp, bl, bpr, label=f"{b_label} + TTA")
             baseline_results[b_label] = {"model": b_model, "metrics": bm, "hist": b_hist}
+        sync_ranks()
 
     # ---------------------------------------------------------
     # STAGE 4: PAPER VISUALIZATIONS & METRICS (RANK 0 ONLY)
@@ -664,5 +685,6 @@ Config D: + TTA (Full Bio-HMSC+++) & {metrics_proposed['acc']:.2f} & {metrics_pr
         print("✓ LATEX TABLE SAVED: /kaggle/working/table_ablation.tex")
         print("✓ ALL MODEL CHECKPOINTS SAVED (.pth)")
 
+    sync_ranks()
     if world_size > 1:
         dist.destroy_process_group()
