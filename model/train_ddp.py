@@ -1,17 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-Bio-HMSC+++ — ULTRA HIGH-THROUGHPUT DDP (DistributedDataParallel)
-Targeting 100% GPU Saturation & Equal VRAM (~13.5GB on both T4 GPUs)
-Run with: torchrun --nproc_per_node=2 train_ddp.py
+Bio-HMSC+++ — DISTRIBUTED DATA PARALLEL (DDP) FULL PAPER PIPELINE
+================================================================
+Paper-Ready Multi-Stage Training Pipeline:
+  • STAGE 1: Proposed Bio-HMSC+++ (EfficientNetV2-M + TaxLoss + EMA + TTA)
+  • STAGE 2: 4-Configuration Ablation Study (Empirical Measurement)
+  • STAGE 3: Baselines Comparison (MobileNetV2, EfficientNet-B0, ResNet50)
+  • STAGE 4: Publication Visualizations (CM, ROC-AUC, Dual Curves, LaTeX Table)
+
+Run command:
+  torchrun --nproc_per_node=2 train_ddp.py
 """
 
-import torch, timm, random, os, zipfile, shutil
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+import torch, timm, random, shutil, time
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import torch.nn.utils as nn_utils
 import numpy as np
-import time
 
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -25,11 +34,12 @@ from sklearn.metrics import (accuracy_score, f1_score, precision_score,
                              recall_score, roc_auc_score, confusion_matrix,
                              classification_report, roc_curve,
                              top_k_accuracy_score)
+from sklearn.preprocessing import label_binarize
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 # ============================================================
-# 1. DDP INITIALIZATION & SEEDING
+# 1. DDP CLUSTER SETUP & INITIALIZATION
 # ============================================================
 
 def setup_ddp():
@@ -38,9 +48,7 @@ def setup_ddp():
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = int(os.environ["LOCAL_RANK"])
     else:
-        rank = 0
-        world_size = 1
-        local_rank = 0
+        rank, world_size, local_rank = 0, 1, 0
 
     if world_size > 1:
         dist.init_process_group(backend="nccl", init_method="env://")
@@ -57,7 +65,8 @@ SEED = 42 + rank
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
 
 device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
@@ -65,32 +74,29 @@ def print_main(*args, **kwargs):
     if is_main_process:
         print(*args, **kwargs)
 
-print_main(f"[DDP Cluster] World Size: {world_size} GPUs initialized | cuDNN Benchmark: Active")
-
-import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+print_main(f"\n[DDP System] Initialized {world_size} GPUs (Local Rank: {local_rank}) | cuDNN Autotuner Active")
 
 # ============================================================
-# 2. HYPERPARAMETERS (Optimal Capacity for Dual T4 GPUs)
+# 2. HYPERPARAMETERS
 # ============================================================
 
-EPOCHS               = 40
-BATCH_SIZE_PER_GPU   = 16          # 16 per GPU = 32 Global Batch Size (Optimal ~11-12GB VRAM per GPU)
-GLOBAL_BATCH_SIZE    = BATCH_SIZE_PER_GPU * world_size
-ACCUMULATION         = 1           # Direct 1-step gradient updates
-LEARNING_RATE        = 1.2e-4
-WEIGHT_DECAY         = 1e-4
-EMA_DECAY            = 0.9998
-LABEL_SMOOTHING      = 0.1
-CLIP_NORM            = 1.0
-PATIENCE             = 10
-TAX_LAMBDA           = 0.3
-IMG_SIZE             = 384
-DROP_RATE            = 0.5
-DROP_PATH_RATE       = 0.2
+EPOCHS             = 40
+BATCH_SIZE_PER_GPU = 16        # 16 per GPU = 32 Global Batch Size (Optimal memory stability)
+GLOBAL_BATCH_SIZE  = BATCH_SIZE_PER_GPU * world_size
+ACCUMULATION       = 1
+LEARNING_RATE      = 1.2e-4
+WEIGHT_DECAY       = 1e-4
+EMA_DECAY          = 0.9998
+LABEL_SMOOTHING    = 0.1
+CLIP_NORM          = 1.0
+PATIENCE           = 10
+TAX_LAMBDA         = 0.3
+IMG_SIZE           = 384
+DROP_RATE          = 0.5
+DROP_PATH_RATE     = 0.2
 
 # ============================================================
-# 3. KAGGLE DATASET HANDLING (RANK 0 ONLY)
+# 3. KAGGLE DATASET AUTOMATIC STAGING (RANK 0 ONLY)
 # ============================================================
 
 CLEAN_DATA_ROOT = "/kaggle/working/cleaned_dataset_root"
@@ -101,7 +107,7 @@ TEST_DIR        = os.path.join(SPLIT_ROOT, "test")
 
 if is_main_process:
     if not os.path.exists(CLEAN_DATA_ROOT) or len(os.listdir(CLEAN_DATA_ROOT)) == 0:
-        print("Scanning /kaggle/input/ for Sea Animals dataset...")
+        print_main("Scanning /kaggle/input/ for Sea Animals dataset...")
         best_root, max_subdirs = "/kaggle/input", 0
         for root, dirs, _ in os.walk("/kaggle/input"):
             valid = [d for d in dirs if not d.startswith('.') and not d.startswith('__')]
@@ -112,7 +118,7 @@ if is_main_process:
         shutil.copytree(best_root, CLEAN_DATA_ROOT, dirs_exist_ok=True)
 
     if not os.path.exists(SPLIT_ROOT):
-        print("Creating 70/15/15 group-based split...")
+        print_main("Creating 70/15/15 group-based split (zero data leakage)...")
         for d in [TRAIN_DIR, VAL_DIR, TEST_DIR]:
             os.makedirs(d, exist_ok=True)
         split_ratio = (0.70, 0.15, 0.15)
@@ -138,10 +144,10 @@ if is_main_process:
                 os.makedirs(dest, exist_ok=True)
                 for img in img_list:
                     shutil.copy(os.path.join(class_path, img), os.path.join(dest, img))
-        print("Dataset preparation complete.")
+        print_main("Split complete.")
 
 if world_size > 1:
-    dist.barrier()  # Synchronize workers after Rank 0 prepares data
+    dist.barrier()
 
 # ============================================================
 # 4. CLASS DEFINITIONS & TAXONOMY
@@ -152,18 +158,16 @@ fine_classes = temp_ds.classes
 num_classes  = len(fine_classes)
 
 COARSE_MAP = {
-    "whale": "mammal",   "dolphin": "mammal", "seal": "mammal",
-    "otter": "mammal",   "sea otter": "mammal",
+    "whale": "mammal",           "dolphin": "mammal",         "seal": "mammal",
+    "otter": "mammal",           "sea otter": "mammal",
     "penguin": "bird",
-    "fish": "fish",      "puffers": "fish",   "sea rays": "fish",
-    "eel": "fish",       "seahorse": "fish",  "sharks": "fish",
-    "octopus": "invertebrate",  "squid": "invertebrate",
-    "jelly fish": "invertebrate", "starfish": "invertebrate",
-    "lobster": "invertebrate",  "shrimp": "invertebrate",
-    "crabs": "invertebrate",    "corals": "invertebrate",
-    "sea urchins": "invertebrate", "clams": "invertebrate",
-    "nudibranchs": "invertebrate",
-    "turtle tortoise": "reptile",
+    "fish": "fish",              "puffers": "fish",           "sea rays": "fish",
+    "eel": "fish",               "seahorse": "fish",          "sharks": "fish",
+    "octopus": "invertebrate",   "squid": "invertebrate",     "jelly fish": "invertebrate",
+    "starfish": "invertebrate",  "lobster": "invertebrate",   "shrimp": "invertebrate",
+    "crabs": "invertebrate",     "corals": "invertebrate",    "sea urchins": "invertebrate",
+    "clams": "invertebrate",     "nudibranchs": "invertebrate",
+    "turtle tortoise": "reptile"
 }
 
 coarse_classes = sorted(set(COARSE_MAP[c.lower().replace('_', ' ')] for c in fine_classes))
@@ -177,7 +181,7 @@ for i, ci in enumerate(fine_classes):
             penalty_matrix[i, j] = 0.5
 
 # ============================================================
-# 5. HIGH-SPEED TRANSFORMS & DISTRIBUTED LOADERS
+# 5. DATA LOADERS
 # ============================================================
 
 train_tfms = transforms.Compose([
@@ -295,7 +299,6 @@ def train_one_epoch(model, ema, loader, optimizer, scaler, loss_fn, use_coarse_l
         correct      += (s_out.argmax(1) == fine_lbl).sum().item()
         total        += fine_lbl.size(0)
 
-    # Gather distributed metrics
     if world_size > 1:
         loss_t = torch.tensor(running_loss, device=device)
         corr_t = torch.tensor(correct, device=device)
@@ -425,28 +428,178 @@ def full_train_run(backbone_name, loss_fn, use_coarse_loss, use_ema, model_save_
     if is_main_process:
         eval_model = BioHMSC(backbone_name).to(device)
         eval_model.load_state_dict(torch.load(full_save_path, weights_only=True))
-        return eval_model, {"train_loss": train_loss_hist, "val_loss": val_loss_hist, "train_acc": train_acc_hist, "val_acc": val_acc_hist, "best_val_acc": best_val_acc}
+        return eval_model, {
+            "train_loss": train_loss_hist, "val_loss": val_loss_hist,
+            "train_acc": train_acc_hist, "val_acc": val_acc_hist,
+            "best_val_acc": best_val_acc, "total_mins": (time.time() - run_start) / 60.0
+        }
     return None, None
 
 # ============================================================
-# 8. EXECUTION PIPELINE
+# 8. COMPLETE MULTI-STAGE RESEARCH PIPELINE
 # ============================================================
 
 if __name__ == "__main__":
+    # ---------------------------------------------------------
+    # STAGE 1: PROPOSED Bio-HMSC+++
+    # ---------------------------------------------------------
     print_main("\n" + "="*60 + "\nSTAGE 1: PROPOSED MODEL — Bio-HMSC+++ (DDP Dual T4)\n" + "="*60)
-    proposed_model, hist = full_train_run(
+    proposed_model, proposed_hist = full_train_run(
         backbone_name   = "tf_efficientnetv2_m",
         loss_fn         = taxonomy_aware_loss,
         use_coarse_loss = True,
         use_ema         = True,
         model_save_path = "proposed_best.pth",
-        label           = "Bio-HMSC+++ (DDP 2xT4)",
+        label           = "Bio-HMSC+++ (EfficientNetV2-M + TaxLoss + EMA)",
     )
 
+    metrics_proposed = None
     if is_main_process and proposed_model is not None:
-        preds, labels, probs = evaluate_full(proposed_model, test_loader, apply_tta=True)
-        metrics = compute_metrics(preds, labels, probs, label="Bio-HMSC+++ (Final Test)")
-        print("\nTraining completed successfully with DistributedDataParallel!")
+        preds_prop, labels_prop, probs_prop = evaluate_full(proposed_model, test_loader, apply_tta=True)
+        metrics_proposed = compute_metrics(preds_prop, labels_prop, probs_prop, label="Bio-HMSC+++ (Final Test)")
+
+    # ---------------------------------------------------------
+    # STAGE 2: 4-CONFIGURATION ABLATION STUDY
+    # ---------------------------------------------------------
+    print_main("\n" + "="*60 + "\nSTAGE 2: PROPER 4-CONFIGURATION ABLATION STUDY\n" + "="*60)
+    
+    # Config A: Standard CE
+    model_A, hist_A = full_train_run(
+        backbone_name   = "tf_efficientnetv2_m",
+        loss_fn         = standard_ce_loss,
+        use_coarse_loss = False,
+        use_ema         = False,
+        model_save_path = "ablation_A.pth",
+        label           = "Config A: EfficientNetV2-M + Standard CE",
+    )
+    metrics_A = None
+    if is_main_process and model_A is not None:
+        p_A, l_A, pr_A = evaluate_full(model_A, test_loader, apply_tta=False)
+        metrics_A = compute_metrics(p_A, l_A, pr_A, label="Config A")
+
+    # Config B: + Taxonomy Loss
+    model_B, hist_B = full_train_run(
+        backbone_name   = "tf_efficientnetv2_m",
+        loss_fn         = taxonomy_aware_loss,
+        use_coarse_loss = True,
+        use_ema         = False,
+        model_save_path = "ablation_B.pth",
+        label           = "Config B: + Taxonomy-Aware Loss",
+    )
+    metrics_B = None
+    if is_main_process and model_B is not None:
+        p_B, l_B, pr_B = evaluate_full(model_B, test_loader, apply_tta=False)
+        metrics_B = compute_metrics(p_B, l_B, pr_B, label="Config B")
+
+    # Config C: + EMA
+    model_C, hist_C = full_train_run(
+        backbone_name   = "tf_efficientnetv2_m",
+        loss_fn         = taxonomy_aware_loss,
+        use_coarse_loss = True,
+        use_ema         = True,
+        model_save_path = "ablation_C.pth",
+        label           = "Config C: + EMA Weight Smoothing",
+    )
+    metrics_C = None
+    if is_main_process and model_C is not None:
+        p_C, l_C, pr_C = evaluate_full(model_C, test_loader, apply_tta=False)
+        metrics_C = compute_metrics(p_C, l_C, pr_C, label="Config C")
+
+    # ---------------------------------------------------------
+    # STAGE 3: BASELINE COMPARISONS
+    # ---------------------------------------------------------
+    print_main("\n" + "="*60 + "\nSTAGE 3: BASELINE COMPARISONS\n" + "="*60)
+    BASELINES = [("mobilenetv2_100", "MobileNetV2"), ("efficientnet_b0", "EfficientNet-B0"), ("resnet50", "ResNet50")]
+    baseline_results = {}
+
+    for b_id, b_label in BASELINES:
+        b_model, b_hist = full_train_run(
+            backbone_name   = b_id,
+            loss_fn         = standard_ce_loss,
+            use_coarse_loss = False,
+            use_ema         = False,
+            model_save_path = f"{b_id}_baseline.pth",
+            label           = f"Baseline: {b_label}",
+        )
+        if is_main_process and b_model is not None:
+            bp, bl, bpr = evaluate_full(b_model, test_loader, apply_tta=True)
+            bm = compute_metrics(bp, bl, bpr, label=f"{b_label} + TTA")
+            baseline_results[b_label] = {"model": b_model, "metrics": bm, "hist": b_hist}
+
+    # ---------------------------------------------------------
+    # STAGE 4: PAPER VISUALIZATIONS & METRICS (RANK 0 ONLY)
+    # ---------------------------------------------------------
+    if is_main_process:
+        print_main("\n" + "*"*60 + "\nSTAGE 4: EXPORTING PUBLICATION VISUALIZATIONS & TABLES\n" + "*"*60)
+        
+        # 1. Confusion Matrix
+        cm = confusion_matrix(labels_prop, preds_prop)
+        plt.figure(figsize=(15, 13))
+        sns.heatmap(cm, annot=False, cmap='Blues', xticklabels=fine_classes, yticklabels=fine_classes)
+        plt.title(f"Confusion Matrix — Bio-HMSC+++ (Test Accuracy: {metrics_proposed['acc']:.2f}%)")
+        plt.xlabel("Predicted Taxonomic Class")
+        plt.ylabel("True Ground Truth Class")
+        plt.xticks(rotation=90, fontsize=8)
+        plt.yticks(rotation=0, fontsize=8)
+        plt.tight_layout()
+        plt.savefig("/kaggle/working/confusion_matrix.png", dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # 2. Dual Training Curves
+        fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+        axes[0].plot(proposed_hist["train_loss"], label="Train Loss", color="blue", lw=2)
+        axes[0].plot(proposed_hist["val_loss"], label="Val Loss", color="red", lw=2)
+        axes[0].set_title("Training & Validation Loss")
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("Loss")
+        axes[0].legend()
+        axes[0].grid(True)
+        axes[1].plot(proposed_hist["train_acc"], label="Train Accuracy", color="blue", lw=2)
+        axes[1].plot(proposed_hist["val_acc"], label="Val Accuracy", color="red", lw=2)
+        axes[1].set_title("Training & Validation Accuracy (%)")
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("Accuracy (%)")
+        axes[1].legend()
+        axes[1].grid(True)
+        plt.tight_layout()
+        plt.savefig("/kaggle/working/training_curves.png", dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # 3. ROC Curves (All 23 classes)
+        try:
+            y_bin = label_binarize(labels_prop, classes=range(num_classes))
+            plt.figure(figsize=(13, 9))
+            colors = plt.cm.tab20(np.linspace(0, 1, num_classes))
+            for i in range(num_classes):
+                fpr, tpr, _ = roc_curve(y_bin[:, i], probs_prop[:, i])
+                plt.plot(fpr, tpr, label=fine_classes[i], color=colors[i], lw=1.2)
+            plt.plot([0, 1], [0, 1], 'k--', lw=1.5, label="Random (AUC=0.50)")
+            plt.title(f"ROC Curves — Bio-HMSC+++ (Macro ROC-AUC: {metrics_proposed['roc_auc']:.4f})")
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.legend(loc='center left', bbox_to_anchor=(1.0, 0.5), fontsize=8, ncol=2)
+            plt.tight_layout()
+            plt.savefig("/kaggle/working/roc_curves.png", dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"ROC Curve export note: {e}")
+
+        # 4. Print Empirical Summary Tables
+        print("\n--- ABLATION STUDY SUMMARY ---")
+        if metrics_A and metrics_B and metrics_C:
+            print(f"  Config A (Standard CE)            : {metrics_A['acc']:.2f}%")
+            print(f"  Config B (+ Taxonomy Loss)        : {metrics_B['acc']:.2f}% [Δ: {metrics_B['acc']-metrics_A['acc']:+.2f}pp]")
+            print(f"  Config C (+ EMA)                  : {metrics_C['acc']:.2f}% [Δ: {metrics_C['acc']-metrics_B['acc']:+.2f}pp]")
+            print(f"  Config D (Full Bio-HMSC+++ + TTA) : {metrics_proposed['acc']:.2f}% [Δ: {metrics_proposed['acc']-metrics_C['acc']:+.2f}pp]")
+
+        print("\n--- BASELINE COMPARISON TABLE ---")
+        for b_label, b_data in baseline_results.items():
+            bm = b_data["metrics"]
+            pm = b_data["model"]
+            params = sum(p.numel() for p in pm.parameters()) / 1e6
+            print(f"  {b_label:<22} | Acc: {bm['acc']:>6.2f}% | F1: {bm['macro_f1']:>6.2f}% | AUC: {bm['roc_auc']:.4f} | {params:.1f}M params")
+        prop_p = sum(p.numel() for p in proposed_model.parameters()) / 1e6
+        print(f"  {'Bio-HMSC+++ (Proposed)':<22} | Acc: {metrics_proposed['acc']:>6.2f}% | F1: {metrics_proposed['macro_f1']:>6.2f}% | AUC: {metrics_proposed['roc_auc']:.4f} | {prop_p:.1f}M params")
 
     if world_size > 1:
         dist.destroy_process_group()
